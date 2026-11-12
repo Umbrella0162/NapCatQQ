@@ -1,0 +1,59 @@
+{
+  "commands": {
+    "Xvfb": "/usr/bin/Xvfb",
+    "curl": "/usr/bin/curl",
+    "ffmpeg": "/usr/bin/ffmpeg",
+    "gosu": "/usr/sbin/gosu",
+    "jq": "/usr/bin/jq",
+    "unzip": "/usr/bin/unzip"
+  },
+  "config": {
+    "Cmd": null,
+    "Entrypoint": [
+      "bash",
+      "entrypoint.sh"
+    ],
+    "ExposedPorts": [],
+    "StopSignal": null,
+    "User": null,
+    "Volumes": [
+      "/app/.config/QQ",
+      "/app/napcat/config"
+    ],
+    "WorkingDir": "/app"
+  },
+  "entrypoint_mode": "755",
+  "env": {
+    "DEBIAN_FRONTEND": "noninteractive",
+    "TZ": "Asia/Shanghai"
+  },
+  "files": {
+    "/app/entrypoint.sh": "493cbb76080754f409e5a097d2b9a745b27a2b7fa79e0808215c218aaaea6fb7",
+    "/app/templates/astrbot.json": "43eba91f0f04a534fc48a73cb09761eddc8ad881ba34c787d20b5f720488a257",
+    "/app/templates/dice.json": "79fb9f91787f7fa14eeb54f0dbfc813dc5c12b32084c68c46225a25f426d14fc",
+    "/app/templates/koishi.json": "7b54e4218b61a0fcfc2ee91b88181a80e64aa60e5443c685439ada8e115643ed",
+    "/app/templates/nonebot.json": "85a72b06ed97dd3bbd9e57c77cefd212843e6534c3ddd41bd271b8fa7d0e72bd",
+    "/app/templates/olivos.json": "b7b1a950f1a2e38c5018bfaff2db7c6cd828e6f027af0effb507a185d2ff91f9",
+    "/app/templates/q2tg.json": "96d4b2526f4a34fd7a0708ea642a247b90caba86cad108242916a7a0b9731bf0",
+    "/app/templates/qq-ai-bot.json": "fd0df657a8a2bf581ddb85c1855878a2aa7390b5a2d36a2514bdd54722794cd4",
+    "/app/templates/sealdice.json": "2654315be3e6bb791d673f2d87cda9d1e075e4a32e1d9eb508e9450e066e6b46",
+    "/app/templates/ws.json": "96d4b2526f4a34fd7a0708ea642a247b90caba86cad108242916a7a0b9731bf0",
+    "/opt/QQ/resources/app/loadNapCat.js": "23e8df920e959348bce1f4ee0808cf37edb9a092d7090acb71fed98f547f8dd5"
+  },
+  "napcat_user": {
+    "gid": 1000,
+    "home": "/app",
+    "shell": "/bin/sh",
+    "uid": 1000
+  },
+  "os": {
+    "id": "ubuntu",
+    "version_id": "22.04"
+  },
+  "packages_missing": [],
+  "qq": {
+    "binary": true,
+    "package_main": "./loadNapCat.js",
+    "version": "3.2.34-53644"
+  }
+}
