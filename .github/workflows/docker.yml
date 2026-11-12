@@ -157,12 +157,19 @@ jobs:
             bad "onebot11.json 与官方 ws 模板不同"
           fi
 
-          # 4) QQ 主进程真的被拉起（NapCat 由它加载）
-          sleep 5
-          if docker top "$NAME" -o args= 2>/dev/null | grep -q '/opt/QQ/qq'; then
-            ok "QQ 主进程运行中（/opt/QQ/qq）"
+          # 4) NapCat 真的在 QQ 里跑起来了
+          #    不用进程名判断：Chromium 会改写 argv，docker top 看不到 /opt/QQ/qq。
+          #    NapCat 跑到登录环节会生成二维码，这只能由 napcat.mjs 产生。
+          for _ in $(seq 1 30); do
+            docker exec "$NAME" test -f /app/napcat/cache/qrcode.png 2>/dev/null && break
+            docker logs "$NAME" 2>&1 | grep -qE 'qrcode|二维码' && break
+            sleep 2
+          done
+          if docker exec "$NAME" test -f /app/napcat/cache/qrcode.png 2>/dev/null \
+             || docker logs "$NAME" 2>&1 | grep -qE 'qrcode|二维码'; then
+            ok "NapCat 已在 QQ 内加载（生成登录二维码）"
           else
-            bad "未看到 /opt/QQ/qq 进程"
+            bad "未见 NapCat 加载迹象（无二维码）"
           fi
 
           echo "---- 容器日志（尾部） ----"
