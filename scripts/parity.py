@@ -9,11 +9,13 @@
 """
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
 import posixpath
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -52,39 +54,117 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def unpack(archive, dest):
-    """按 manifest 顺序展开层（docker save / dockerTools.pullImage 产物）。"""
-    with tarfile.open(archive) as tf:
+def _decompress(src, dst):
+    """把 src 解压到 dst；返回压缩类型名。"""
+    with open(src, "rb") as f:
+        magic = f.read(4)
+    if magic[:2] == b"\x1f\x8b":
+        with gzip.open(src, "rb") as fin, open(dst, "wb") as fout:
+            shutil.copyfileobj(fin, fout, 1 << 20)
+        return "gzip"
+    if magic == b"\x28\xb5\x2f\xfd":
         try:
-            manifest = json.loads(tf.extractfile("manifest.json").read())
-        except KeyError:
-            sys.exit(f"错误：{archive} 不是 docker-archive（缺少 manifest.json）")
+            import zstandard  # type: ignore
+            with open(src, "rb") as fin, open(dst, "wb") as fout:
+                zstandard.ZstdDecompressor().copy_stream(fin, fout)
+        except ImportError:
+            if shutil.which("zstd") is None:
+                sys.exit("错误：层是 zstd 压缩，但缺少 zstandard 模块与 zstd 命令")
+            with open(dst, "wb") as fout:
+                subprocess.run(["zstd", "-dc", src], check=True, stdout=fout)
+        return "zstd"
+    return "none"
 
-        for layer_name in manifest[0]["Layers"]:
-            stream = tf.extractfile(layer_name)
-            if stream is None:
+
+def _extract_layer(layer_path, dest):
+    """展开单层；层可能是未压缩 tar、gzip 或 zstd（docker save 的三种产物）。"""
+    tar_path = layer_path
+    workdir = os.path.dirname(layer_path)
+    decompressed = os.path.join(workdir, "layer.dec.tar")
+    kind = _decompress(layer_path, decompressed)
+    if kind != "none":
+        tar_path = decompressed
+
+    with tarfile.open(tar_path, "r|") as layer:
+        for member in layer:
+            name = member.name.lstrip("./")
+            if not name:
                 continue
-            with tarfile.open(fileobj=stream, mode="r|") as layer:
-                for member in layer:
-                    name = member.name.lstrip("./")
-                    if not name:
-                        continue
-                    base = posixpath.basename(name)
-                    if base.startswith(".wh."):  # 上层删除
-                        victim = os.path.join(dest, posixpath.dirname(name),
-                                              base[len(".wh."):])
-                        subprocess.run(["rm", "-rf", victim], check=False)
-                        continue
-                    target = os.path.join(dest, name)
-                    if not os.path.realpath(target).startswith(
-                            os.path.realpath(dest) + os.sep):
-                        continue
-                    try:
-                        layer.extract(member, dest, numeric_owner=True)
-                    except (PermissionError, OSError):
-                        pass
+            base = posixpath.basename(name)
+            if base.startswith(".wh."):  # 上层删除
+                victim = os.path.join(dest, posixpath.dirname(name),
+                                      base[len(".wh."):])
+                subprocess.run(["rm", "-rf", victim], check=False)
+                continue
+            target = os.path.join(dest, name)
+            if not os.path.realpath(target).startswith(
+                    os.path.realpath(dest) + os.sep):
+                continue
+            try:
+                # filter="tar" 在 Python 3.12+ 可用，能挡掉绝对路径与 ..
+                try:
+                    layer.extract(member, dest, numeric_owner=True, filter="tar")
+                except TypeError:
+                    layer.extract(member, dest, numeric_owner=True)
+            except (PermissionError, OSError):
+                pass
 
-        return json.loads(tf.extractfile(manifest[0]["Config"]).read())
+
+def _spill(tf, member_name, workdir, prefix):
+    """把外层归档里的成员流式落盘，返回路径。"""
+    out = os.path.join(workdir, f"{prefix}-{posixpath.basename(member_name)}")
+    stream = tf.extractfile(member_name)
+    if stream is None:
+        return None
+    with open(out, "wb") as f:
+        shutil.copyfileobj(stream, f, 1 << 20)
+    return out
+
+
+def _resolve_layers(tf, names, workdir):
+    """返回 (config 路径, 按顺序的层路径)。
+
+    支持两种布局：docker-archive（manifest.json）与 OCI（index.json + blobs/）。
+    """
+    if "manifest.json" in names:
+        manifest = json.loads(tf.extractfile("manifest.json").read())
+        config = _spill(tf, manifest[0]["Config"], workdir, "cfg")
+        layers = [_spill(tf, n, workdir, "layer") for n in manifest[0]["Layers"]]
+        return config, [l for l in layers if l]
+
+    if "index.json" in names:  # OCI / containerd 镜像存储
+        index = json.loads(tf.extractfile("index.json").read())
+        manifests = index.get("manifests") or []
+        if not manifests:
+            sys.exit("错误：OCI 布局里没有 manifests")
+        digest = manifests[0]["digest"].split(":")[-1]
+        manifest = json.loads(
+            tf.extractfile(f"blobs/sha256/{digest}").read())
+        cfg_digest = manifest["config"]["digest"].split(":")[-1]
+        config = _spill(tf, f"blobs/sha256/{cfg_digest}", workdir, "cfg")
+        layers = [
+            _spill(tf, "blobs/sha256/" + item["digest"].split(":")[-1],
+                   workdir, "layer")
+            for item in manifest["layers"]
+        ]
+        return config, [l for l in layers if l]
+
+    sys.exit("错误：既没有 manifest.json 也没有 index.json，不是镜像归档")
+
+
+def unpack(archive, dest):
+    """按顺序展开层，返回 image config。"""
+    workdir = tempfile.mkdtemp(prefix="layers-")
+    try:
+        with tarfile.open(archive) as tf:
+            names = set(tf.getnames())
+            config_path, layer_paths = _resolve_layers(tf, names, workdir)
+            for layer_path in layer_paths:
+                _extract_layer(layer_path, dest)
+            with open(config_path, "rb") as f:
+                return json.loads(f.read())
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def installed_packages(root):
